@@ -441,6 +441,7 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             csv_bytes = download_csv(url, ssl)
             df_nieuw  = csv_naar_df(csv_bytes, sep)
             df_nieuw = filter_op_postcodes(df_nieuw, postcode_k, postcodes)
+            gefilterd_bytes = df_nieuw.to_csv(index=False, sep=sep).encode("utf-8")
             _log(f"Gedownload: {len(df_nieuw):,} rijen.")
 
             vorige = opslag.lees(PAD_HUIDIG)
@@ -466,8 +467,8 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
                     _log("Changelog opgeslagen.")
 
             _log("Nieuwe versie opslaan in repository...")
-            opslag.schrijf(archief_pad(vandaag), csv_bytes, f"Archief: {vandaag}")
-            opslag.schrijf(PAD_HUIDIG,           csv_bytes, f"Momentopname: {vandaag}")
+            opslag.schrijf(archief_pad(vandaag), gefilterd_bytes, f"Archief: {vandaag}")
+            opslag.schrijf(PAD_HUIDIG,           gefilterd_bytes, f"Momentopname: {vandaag}")
             _log("Versie opgeslagen.", "ok")
 
             verwijderd = verwijder_verouderd(opslag, cfg["archief"]["bewaarperiode_dagen"])
