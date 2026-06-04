@@ -129,11 +129,19 @@ class GitHubOpslag:
         r.raise_for_status()
 
     def lees(self, pad: str) -> bytes | None:
-        """Geeft bestandsinhoud als bytes terug, of None als het niet bestaat."""
         meta = self._meta(pad)
         if meta is None:
             return None
-        return base64.b64decode(meta["content"])
+        content = meta.get("content", "").strip()
+        if content:
+            return base64.b64decode(content)
+        # Bestand te groot voor inline content (>1MB) — gebruik download_url
+        download_url = meta.get("download_url")
+        if download_url:
+            r = requests.get(download_url, headers=self._hdrs, timeout=120)
+            self._controleer_status(r)
+            return r.content
+        return None
 
     def schrijf(self, pad: str, inhoud: bytes, bericht: str) -> None:
         """Maak een nieuw bestand aan of overschrijf een bestaand bestand."""
