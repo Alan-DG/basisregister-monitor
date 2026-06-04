@@ -606,6 +606,9 @@ if st.session_state.fout:
         "Controleer de instellingen in het zijpaneel en klik op "
         "**Sessie opnieuw starten** om het opnieuw te proberen."
     )
+    with st.expander("📄 Uitvoeringslog"):
+        for regel in st.session_state.run_log:
+            st.text(regel)
     st.stop()
 
 
