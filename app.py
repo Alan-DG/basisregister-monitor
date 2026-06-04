@@ -64,6 +64,8 @@ def _standaard_config() -> dict[str, Any]:
             "sleutelkolom":         "business_product_id",
             "naamkolom":            "name",
             "uitgesloten_kolommen": [],
+            "postcode_kolom": "postal_code",
+            "postcodes": [3000, 3001, 3010, 3012, 3018],
         },
         "archief":  {"bewaarperiode_dagen": 60},
         "netwerk":  {"ssl_verificatie": True},
@@ -257,6 +259,13 @@ def download_csv(url: str, ssl: bool) -> bytes:
 def csv_naar_df(b: bytes, sep: str) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(b), sep=sep, dtype=str).fillna("")
 
+def filter_op_postcodes(df: pd.DataFrame, kolom: str, postcodes: list[str]) -> pd.DataFrame:
+    if not kolom or kolom not in df.columns:
+        return df
+    df = df[df[kolom].str.strip() != ""].copy()
+    if postcodes:
+        df = df[df[kolom].str.strip().isin(postcodes)]
+    return df
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Diff-berekening
@@ -400,6 +409,8 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
     sleutel = cfg["kolommen"]["sleutelkolom"]
     naam_k  = cfg["kolommen"]["naamkolom"]
     uitgesl = cfg["kolommen"]["uitgesloten_kolommen"]
+    postcode_k   = cfg["kolommen"].get("postcode_kolom", "")
+    postcodes    = [str(p) for p in cfg["kolommen"].get("postcodes", [])]
 
     try:
         _log("Beschikbare archieven ophalen...")
@@ -429,6 +440,7 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             _log("Download-URL gevonden.")
             csv_bytes = download_csv(url, ssl)
             df_nieuw  = csv_naar_df(csv_bytes, sep)
+            df_nieuw = filter_op_postcodes(df_nieuw, postcode_k, postcodes)
             _log(f"Gedownload: {len(df_nieuw):,} rijen.")
 
             vorige = opslag.lees(PAD_HUIDIG)
