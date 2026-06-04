@@ -1,0 +1,37 @@
+# Basisregister Monitor — Standaardconfiguratie
+# ================================================
+# Wijzigingen hier zijn van kracht na de volgende herdeployment op Streamlit Cloud.
+# Per-sessie overrides zijn beschikbaar via het zijpaneel in de applicatie (worden niet opgeslagen).
+
+[bron]
+# Pagina van Toerisme Vlaanderen waarop de download-link gevonden wordt.
+datasets_pagina_url = "https://linked.toerismevlaanderen.be/datasets"
+
+# Koptekst waaronder de CSV-download-link staat.
+# Aanpassen als Toerisme Vlaanderen de paginastructuur wijzigt.
+csv_label = "Basisregister Vlaams Logiesaanbod"
+
+# Veldscheidingsteken in het CSV-bestand.
+csv_scheidingsteken = ";"
+
+[kolommen]
+# Kolom die elke rij uniek identificeert. Wordt gebruikt als primaire sleutel voor de diff.
+sleutelkolom = "business_product_id"
+
+# Kolom met de leesbare naam van het logies (voor de changelog en weergave).
+naamkolom = "name"
+
+# Kolommen die worden overgeslagen bij de veld-voor-veld vergelijking.
+# Handig voor kolommen met onbedoelde veranderingen (bijv. automatisch bijgewerkte tijdstempels).
+# Voorbeeld: uitgesloten_kolommen = ["last_updated", "internal_id"]
+uitgesloten_kolommen = []
+
+[archief]
+# Aantal dagen dat dagelijkse archieven bewaard worden.
+# Archieven ouder dan deze grens worden automatisch verwijderd.
+bewaarperiode_dagen = 60
+
+[netwerk]
+# SSL-certificaatverificatie. Zet op false alleen bij verbindingsproblemen via een bedrijfsnetwerk.
+# Op Streamlit Community Cloud hoeft dit nooit uitgeschakeld te worden.
+ssl_verificatie = true
