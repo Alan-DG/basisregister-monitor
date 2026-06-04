@@ -21,6 +21,10 @@ sleutelkolom = "business_product_id"
 # Kolom met de leesbare naam van het logies (voor de changelog en weergave).
 naamkolom = "name"
 
+# Enkel deze postcodes onder de postal_code kolom moeten rekening mee gehouden worden.
+postcode_kolom = "postal_code"
+postcodes = [3000, 3001, 3010, 3012, 3018]
+
 # Kolommen die worden overgeslagen bij de veld-voor-veld vergelijking.
 # Handig voor kolommen met onbedoelde veranderingen (bijv. automatisch bijgewerkte tijdstempels).
 # Voorbeeld: uitgesloten_kolommen = ["last_updated", "internal_id"]
