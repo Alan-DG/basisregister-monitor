@@ -15,7 +15,7 @@ import base64
 import io
 import re
 import warnings
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -173,17 +173,17 @@ class GitHubOpslag:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def archief_pad(dag: date) -> str:
-    return f"{PAD_ARCHIEF}/basisregister_{dag.isoformat()}.csv"
+    return f"{PAD_ARCHIEF}/basisregister_{dag.strftime('%d-%m-%Y')}.csv"
 
 
 def beschikbare_datums(opslag: GitHubOpslag) -> list[date]:
     """Geeft alle beschikbare archiefdatums terug, aflopend gesorteerd."""
     datums: list[date] = []
     for item in opslag.lijst(PAD_ARCHIEF):
-        m = re.match(r"basisregister_(\d{4}-\d{2}-\d{2})\.csv", item.get("name", ""))
+        m = re.match(r"basisregister_(\d{2}-\d{2}-\d{4})\.csv", item.get("name", ""))
         if m:
             try:
-                datums.append(date.fromisoformat(m.group(1)))
+                datums.append(datetime.strptime(m.group(1), "%d-%m-%Y").date())
             except ValueError:
                 pass
     return sorted(datums, reverse=True)
@@ -405,7 +405,9 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             inhoud = opslag.lees(archief_pad(vandaag))
             if inhoud:
                 st.session_state.huidig_df = csv_naar_df(inhoud, sep)
-            _log(f"Geladen: {len(st.session_state.huidig_df):,} rijen.", "ok")
+                _log(f"Geladen: {len(st.session_state.huidig_df):,} rijen.", "ok")
+            else:
+                _log("Archief van vandaag kon niet worden geladen.", "warn")
             st.session_state.vandaag_opgeslagen = False
 
         else:
