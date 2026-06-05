@@ -302,7 +302,7 @@ def bereken_diff(
         if sleutel not in df.columns:
             raise ValueError(
                 f"Sleutelkolom '{sleutel}' ontbreekt in de {label} versie. "
-                "Pas de instelling 'Sleutelkolom' aan in het zijpaneel."
+                "Controleer de waarde van 'sleutelkolom' in config.toml."
             )
 
     datum = date.today().strftime("%d-%m-%Y")
@@ -512,58 +512,20 @@ cfg_standaard = laad_config()
 
 with st.sidebar:
     st.title("⚙️ Instellingen")
-    st.caption(
-        "Wijzigingen gelden uitsluitend voor deze sessie en worden "
-        "niet opgeslagen in de repository."
-    )
 
-    with st.expander("Gegevensbron"):
+    with st.expander("Gegevensbron", expanded=False):
         pagina_url = st.text_input(
             "Datasets-pagina URL",
             value=cfg_standaard["bron"]["datasets_pagina_url"],
+            help=(
+                "Pas enkel aan als Toerisme Vlaanderen de URL van de "
+                "datasets-pagina heeft gewijzigd."
+            ),
         )
-        csv_label = st.text_input(
-            "CSV-label op de pagina",
-            value=cfg_standaard["bron"]["csv_label"],
+        st.caption(
+            "Alle andere instellingen (kolomnamen, scheidingsteken, bewaarperiode, …) "
+            "zijn vastgelegd in de configuratie en hoeven normaal niet gewijzigd te worden."
         )
-        csv_sep = st.text_input(
-            "CSV-scheidingsteken",
-            value=cfg_standaard["bron"]["csv_scheidingsteken"],
-        )
-
-    with st.expander("Kolominstellingen"):
-        sleutelkolom = st.text_input(
-            "Sleutelkolom (unieke ID)",
-            value=cfg_standaard["kolommen"]["sleutelkolom"],
-        )
-        naamkolom = st.text_input(
-            "Naamkolom",
-            value=cfg_standaard["kolommen"]["naamkolom"],
-        )
-        uitgesl_tekst = st.text_area(
-            "Uitgesloten kolommen (één per regel)",
-            value="\n".join(cfg_standaard["kolommen"]["uitgesloten_kolommen"]),
-            height=100,
-        )
-
-    with st.expander("Archief"):
-        bewaar_dagen = st.number_input(
-            "Bewaarperiode in dagen",
-            min_value=1,
-            max_value=365,
-            value=int(cfg_standaard["archief"]["bewaarperiode_dagen"]),
-        )
-
-    with st.expander("Netwerk"):
-        ssl_aan = st.toggle(
-            "SSL-verificatie inschakelen",
-            value=bool(cfg_standaard["netwerk"]["ssl_verificatie"]),
-        )
-        if not ssl_aan:
-            st.warning(
-                "SSL-verificatie is uitgeschakeld voor deze sessie. "
-                "Gebruik dit alleen bij verbindingsproblemen via een bedrijfsnetwerk."
-            )
 
     st.divider()
 
@@ -573,29 +535,21 @@ with st.sidebar:
         st.rerun()
 
     st.caption(
-        "Klik op 'Sessie opnieuw starten' om gewijzigde instellingen "
-        "toe te passen op een nieuwe download."
+        "Gebruik 'Sessie opnieuw starten' als de pagina vastloopt "
+        "of als u een aangepaste URL wilt toepassen."
     )
 
-# Build the active session config from sidebar values
+# Build the active session config: only the source URL can be overridden via the sidebar.
 cfg_sessie: dict[str, Any] = {
     "bron": {
         "datasets_pagina_url": pagina_url,
-        "csv_label":           csv_label,
-        "csv_scheidingsteken": csv_sep,
+        "csv_label":           cfg_standaard["bron"]["csv_label"],
+        "csv_scheidingsteken": cfg_standaard["bron"]["csv_scheidingsteken"],
     },
-    "kolommen": {
-        "sleutelkolom":         sleutelkolom,
-        "naamkolom":            naamkolom,
-        "uitgesloten_kolommen": [
-            x.strip() for x in uitgesl_tekst.splitlines() if x.strip()
-        ],
-    },
-    "archief":  {"bewaarperiode_dagen": int(bewaar_dagen)},
-    "netwerk":  {"ssl_verificatie": ssl_aan},
+    "kolommen": dict(cfg_standaard["kolommen"]),
+    "archief":  dict(cfg_standaard["archief"]),
+    "netwerk":  dict(cfg_standaard["netwerk"]),
 }
-cfg_sessie["kolommen"]["postcode_kolom"] = cfg_standaard["kolommen"].get("postcode_kolom", "")
-cfg_sessie["kolommen"]["postcodes"]      = cfg_standaard["kolommen"].get("postcodes", [])
 
 
 # ── Secrets laden ─────────────────────────────────────────────────────────────
@@ -616,8 +570,17 @@ except KeyError as exc:
 # ── Pipeline uitvoeren bij eerste laad ───────────────────────────────────────
 
 if not st.session_state.pipeline_klaar:
-    with st.spinner("Basisregister controleren — even geduld..."):
+    st.markdown("### ⏳ Basisregister wordt gecontroleerd…")
+    st.warning(
+        "**Als dit de eerste controle van de dag is, wordt het volledige register gedownload "
+        "en veld voor veld vergeleken met de vorige versie.**\n\n"
+        "Dit kan **5 à 10 minuten** duren, afhankelijk van de bestandsgrootte en de "
+        "verbindingssnelheid. De pagina laadt automatisch opnieuw zodra de verwerking "
+        "voltooid is — sluit dit venster of tabblad niet."
+    )
+    with st.spinner("Downloaden en verwerken — even geduld…"):
         run_pipeline(opslag, cfg_sessie)
+    st.rerun()
 
 
 # ── Paginatitel ───────────────────────────────────────────────────────────────
@@ -726,7 +689,11 @@ else:
 
     # Load selected archive, cached per session to avoid repeated API calls
     if geselecteerde_datum not in st.session_state.archief_cache:
-        with st.spinner(f"Archiefversie van {geselecteerd_label} laden..."):
+        _laad_info = st.info(
+            f"📂 Archiefversie van **{geselecteerd_label}** wordt opgehaald uit de repository. "
+            "Dit kan 1 à 2 minuten duren — even geduld…"
+        )
+        with st.spinner(f"Archiefversie van {geselecteerd_label} laden…"):
             try:
                 b = opslag.lees(archief_pad(geselecteerde_datum))
                 if b:
@@ -742,6 +709,7 @@ else:
             except Exception as exc:
                 st.error(f"Kon archief van {geselecteerd_label} niet laden: {exc}")
                 st.session_state.archief_cache[geselecteerde_datum] = None
+        _laad_info.empty()
 
     df_archief = st.session_state.archief_cache.get(geselecteerde_datum)
 
@@ -826,27 +794,8 @@ with st.expander("📄 Uitvoeringslog"):
     if not st.session_state.run_log:
         st.text("Geen logberichten.")
 
-# Show non-default session settings if any are active
-afwijkingen: list[str] = []
-cfg_s = cfg_standaard
-cfg_n = cfg_sessie
-if cfg_n["bron"]["datasets_pagina_url"] != cfg_s["bron"]["datasets_pagina_url"]:
-    afwijkingen.append(f"datasets_pagina_url  →  {cfg_n['bron']['datasets_pagina_url']}")
-if cfg_n["bron"]["csv_label"] != cfg_s["bron"]["csv_label"]:
-    afwijkingen.append(f"csv_label  →  {cfg_n['bron']['csv_label']}")
-if cfg_n["kolommen"]["sleutelkolom"] != cfg_s["kolommen"]["sleutelkolom"]:
-    afwijkingen.append(f"sleutelkolom  →  {cfg_n['kolommen']['sleutelkolom']}")
-if cfg_n["kolommen"]["naamkolom"] != cfg_s["kolommen"]["naamkolom"]:
-    afwijkingen.append(f"naamkolom  →  {cfg_n['kolommen']['naamkolom']}")
-if not cfg_n["netwerk"]["ssl_verificatie"]:
-    afwijkingen.append("ssl_verificatie  →  uitgeschakeld")
-if cfg_n["archief"]["bewaarperiode_dagen"] != cfg_s["archief"]["bewaarperiode_dagen"]:
-    afwijkingen.append(
-        f"bewaarperiode_dagen  →  {cfg_n['archief']['bewaarperiode_dagen']}"
-    )
-
-if afwijkingen:
-    with st.expander("⚠️ Actieve sessie-instellingen (afwijkend van standaard)"):
-        st.caption("Deze instellingen wijken af van de waarden in config.toml:")
-        for a in afwijkingen:
-            st.text(f"• {a}")
+# Toon een melding als de gebruiker de datasets-URL heeft aangepast
+if cfg_sessie["bron"]["datasets_pagina_url"] != cfg_standaard["bron"]["datasets_pagina_url"]:
+    with st.expander("⚠️ Aangepaste sessie-instelling"):
+        st.caption("De datasets-pagina URL wijkt af van de standaardwaarde in config.toml:")
+        st.text(f"• datasets_pagina_url  →  {cfg_sessie['bron']['datasets_pagina_url']}")
