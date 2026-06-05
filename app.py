@@ -38,6 +38,7 @@ try:
     import folium
     FOLIUM_BESCHIKBAAR = True
 except ImportError:
+    folium = None  # type: ignore[assignment]
     FOLIUM_BESCHIKBAAR = False
 
 warnings.filterwarnings("ignore")
@@ -439,7 +440,7 @@ def _popup_html(rij: pd.Series, naam: str) -> str:
     rijen_html = "".join(
         f'<tr>'
         f'<td style="color:#777;padding:2px 8px 2px 0;vertical-align:top;'
-        f'white-space:nowrap;font-weight:600">{_esc(kol)}</td>'
+        f'white-space:nowrap;font-weight:600">{_esc(str(kol))}</td>'
         f'<td style="padding:2px 0;word-break:break-word">{_esc(waarde)}</td>'
         f'</tr>'
         for kol, waarde in rij.items()
@@ -685,7 +686,7 @@ def maak_kaart(df: pd.DataFrame, naam_kol: str = "name") -> "folium.Map | None":
 }})();
 </script>"""
 
-    m.get_root().html.add_child(folium.Element(legende_html))
+    m.get_root().html.add_child(folium.Element(legende_html))  # type: ignore[attr-defined]
     return m
 
 
