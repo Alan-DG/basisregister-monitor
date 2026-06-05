@@ -1220,7 +1220,7 @@ elif st.session_state.huidig_df is not None:
             "niet gevonden in het register, of alle coördinaten zijn ongeldig."
         )
     else:
-        components.html(kaart._repr_html_(), height=560)
+        components.html(kaart._repr_html_(), height=700)
 
 
 # ── Download huidige registerversie ──────────────────────────────────────────
