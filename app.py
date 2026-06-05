@@ -574,7 +574,7 @@ if not st.session_state.pipeline_klaar:
     st.warning(
         "**Als dit de eerste controle van de dag is, wordt het volledige register gedownload "
         "en veld voor veld vergeleken met de vorige versie.**\n\n"
-        "Dit kan **5 à 10 minuten** duren, afhankelijk van de bestandsgrootte en de "
+        "Dit kan even duren, afhankelijk van de bestandsgrootte en de "
         "verbindingssnelheid. De pagina laadt automatisch opnieuw zodra de verwerking "
         "voltooid is — sluit dit venster of tabblad niet."
     )
@@ -691,7 +691,7 @@ else:
     if geselecteerde_datum not in st.session_state.archief_cache:
         _laad_info = st.info(
             f"📂 Archiefversie van **{geselecteerd_label}** wordt opgehaald uit de repository. "
-            "Dit kan 1 à 2 minuten duren — even geduld…"
+            "Dit kan even duren — even geduld…"
         )
         with st.spinner(f"Archiefversie van {geselecteerd_label} laden…"):
             try:
