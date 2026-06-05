@@ -569,7 +569,7 @@ def maak_kaart(df: pd.DataFrame, naam_kol: str = "name") -> "folium.Map | None":
     legende_html = f"""
 <style>
   .leg-panel{{
-    position:fixed;bottom:30px;right:30px;z-index:9999;
+    position:fixed;top:10px;right:10px;z-index:9999;
     background:white;border-radius:8px;padding:10px 13px;
     box-shadow:0 2px 14px rgba(0,0,0,.18);font-family:Arial,sans-serif;
     min-width:165px;max-height:90vh;overflow-y:auto;
