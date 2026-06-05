@@ -454,6 +454,7 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             else:
                 _log("Vergelijken met vorige versie...")
                 df_oud  = csv_naar_df(vorige, sep)
+                df_oud  = filter_op_postcodes(df_oud, postcode_k, postcodes)
                 diff_df = bereken_diff(df_nieuw, df_oud, sleutel, naam_k, uitgesl)
                 n = len(diff_df)
                 _log(f"Diff berekend: {n:,} wijziging(en) gevonden.", "ok")
