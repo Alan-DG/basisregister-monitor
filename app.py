@@ -812,7 +812,9 @@ else:
             "Upload een CSV-bestand dat u eerder heeft gedownload via de knop "
             "'Download huidige registerversie als CSV' onderaan deze pagina. "
             "Het bestand wordt niet opgeslagen — de vergelijking vindt alleen "
-            "lokaal in uw browsersessie plaats."
+            "lokaal in uw browsersessie plaats. "
+            "Het bestand dient .csv formaat te zijn en geen verdere "
+            "formaatwijzigingen te bevatten. "
         ),
     )
 
