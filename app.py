@@ -528,13 +528,49 @@ def toon_vergelijking(
         },
     )
 
+    # ── Volledige gegevens per betrokken logies ───────────────────────────────
+    # Nieuw / gewijzigd → volledige rij uit de huidige versie.
+    # Verdwenen         → volledige rij uit de vergelijkingsversie.
+    sleutel = cfg["kolommen"]["sleutelkolom"]
+
+    def _zoek_rij(df: pd.DataFrame, nr: str) -> dict | None:
+        match = df[df[sleutel].astype(str).str.strip() == nr]
+        return match.iloc[0].to_dict() if not match.empty else None
+
+    volledig_rijen: list[dict] = []
+    for nr, groep in diff.groupby("registratienummer"):
+        nr = str(nr)
+        types = set(groep["wijziging_type"])
+        if "verdwenen" in types:
+            rij = _zoek_rij(df_vergelijk, nr)
+            label_type = "verdwenen"
+        elif "nieuw" in types:
+            rij = _zoek_rij(df_huidig, nr)
+            label_type = "nieuw"
+        else:
+            rij = _zoek_rij(df_huidig, nr)
+            label_type = "gewijzigd"
+        if rij is not None:
+            volledig_rijen.append({"wijziging_type": label_type, **rij})
+
+    df_volledig = pd.DataFrame(volledig_rijen) if volledig_rijen else pd.DataFrame()
+
+    # ── Excel-export met twee tabbladen ──────────────────────────────────────
     buf = io.BytesIO()
-    diff.to_excel(buf, index=False, engine="openpyxl")
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        diff.to_excel(writer, sheet_name="Wijzigingen", index=False)
+        if not df_volledig.empty:
+            df_volledig.to_excel(writer, sheet_name="Volledige gegevens", index=False)
+
     st.download_button(
         "📥 Download dit overzicht als Excel",
         buf.getvalue(),
         bestandsnaam,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help=(
+            "Tabblad 'Wijzigingen': overzicht van alle gewijzigde velden. "
+            "Tabblad 'Volledige gegevens': volledige registerrij per betrokken logies."
+        ),
     )
 
 
