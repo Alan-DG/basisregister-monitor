@@ -423,7 +423,8 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             _log(f"Versie van vandaag ({vandaag.strftime('%d-%m-%Y')}) bestaat al — laden...")
             inhoud = opslag.lees(archief_pad(vandaag))
             if inhoud:
-                st.session_state.huidig_df = csv_naar_df(inhoud, sep)
+                df_vandaag = csv_naar_df(inhoud, sep)
+                st.session_state.huidig_df = filter_op_postcodes(df_vandaag, postcode_k, postcodes)
                 _log(f"Geladen: {len(st.session_state.huidig_df):,} rijen.", "ok")
             else:
                 _log("Archief van vandaag kon niet worden geladen.", "warn")
@@ -592,6 +593,8 @@ cfg_sessie: dict[str, Any] = {
     "archief":  {"bewaarperiode_dagen": int(bewaar_dagen)},
     "netwerk":  {"ssl_verificatie": ssl_aan},
 }
+cfg_sessie["kolommen"]["postcode_kolom"] = cfg_standaard["kolommen"].get("postcode_kolom", "")
+cfg_sessie["kolommen"]["postcodes"]      = cfg_standaard["kolommen"].get("postcodes", [])
 
 
 # ── Secrets laden ─────────────────────────────────────────────────────────────
@@ -725,10 +728,16 @@ else:
         with st.spinner(f"Archiefversie van {geselecteerd_label} laden..."):
             try:
                 b = opslag.lees(archief_pad(geselecteerde_datum))
-                st.session_state.archief_cache[geselecteerde_datum] = (
-                    csv_naar_df(b, cfg_sessie["bron"]["csv_scheidingsteken"])
-                    if b else None
-                )
+                if b:
+                    df_arch = csv_naar_df(b, cfg_sessie["bron"]["csv_scheidingsteken"])
+                    df_arch = filter_op_postcodes(
+                        df_arch,
+                        cfg_sessie["kolommen"].get("postcode_kolom", ""),
+                        [str(p) for p in cfg_sessie["kolommen"].get("postcodes", [])],
+                    )
+                    st.session_state.archief_cache[geselecteerde_datum] = df_arch
+                else:
+                    st.session_state.archief_cache[geselecteerde_datum] = None
             except Exception as exc:
                 st.error(f"Kon archief van {geselecteerd_label} niet laden: {exc}")
                 st.session_state.archief_cache[geselecteerde_datum] = None
