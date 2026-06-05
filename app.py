@@ -4,7 +4,7 @@ app.py — Basisregister Monitor
 Streamlit-applicatie voor het bewaken van wijzigingen in het
 Basisregister Vlaams Logiesaanbod (Toerisme Vlaanderen).
 
-Versie:  1.0
+Versie:  2.0
 Opslag:  Privé GitHub-repository via REST API
 Hosting: Streamlit Community Cloud
 """
@@ -39,13 +39,12 @@ warnings.filterwarnings("ignore")
 # Constanten — paden in de GitHub-repository
 # ─────────────────────────────────────────────────────────────────────────────
 
-PAD_HUIDIG    = "data/basisregister_huidig.csv"
-PAD_CHANGELOG = "data/changelog.xlsx"
-PAD_ARCHIEF   = "data/archief"
+PAD_HUIDIG  = "data/basisregister_huidig.csv"
+PAD_ARCHIEF = "data/archief"
 
-CHANGELOG_KOLOMMEN = [
-    "datum_check", "is_laatste_check", "registratienummer",
-    "naam", "wijziging_type", "kolom", "oude_waarde", "nieuwe_waarde",
+DIFF_KOLOMMEN = [
+    "registratienummer", "naam", "wijziging_type",
+    "kolom", "oude_waarde", "nieuwe_waarde",
 ]
 
 
@@ -64,11 +63,11 @@ def _standaard_config() -> dict[str, Any]:
             "sleutelkolom":         "business_product_id",
             "naamkolom":            "name",
             "uitgesloten_kolommen": [],
-            "postcode_kolom": "postal_code",
-            "postcodes": [3000, 3001, 3010, 3012, 3018],
+            "postcode_kolom":       "postal_code",
+            "postcodes":            [3000, 3001, 3010, 3012, 3018],
         },
-        "archief":  {"bewaarperiode_dagen": 60},
-        "netwerk":  {"ssl_verificatie": True},
+        "archief": {"bewaarperiode_dagen": 60},
+        "netwerk": {"ssl_verificatie": True},
     }
 
 
@@ -137,7 +136,7 @@ class GitHubOpslag:
         content = meta.get("content", "").strip()
         if content:
             return base64.b64decode(content)
-        # Bestand te groot voor inline content (>1MB) — gebruik download_url
+        # Bestand te groot voor inline content (>1 MB) — gebruik download_url
         download_url = meta.get("download_url")
         if download_url:
             r = requests.get(download_url, headers=self._hdrs, timeout=120)
@@ -202,7 +201,7 @@ def beschikbare_datums(opslag: GitHubOpslag) -> list[date]:
 def verwijder_verouderd(opslag: GitHubOpslag, bewaar_dagen: int) -> list[date]:
     """Verwijder archiefbestanden ouder dan bewaar_dagen dagen."""
     grens      = date.today() - timedelta(days=bewaar_dagen)
-    verwijderd : list[date] = []
+    verwijderd: list[date] = []
     for d in beschikbare_datums(opslag):
         if d < grens:
             opslag.verwijder(archief_pad(d), f"Archief opruimen: {d}")
@@ -211,7 +210,7 @@ def verwijder_verouderd(opslag: GitHubOpslag, bewaar_dagen: int) -> list[date]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSV downloaden
+# CSV downloaden en verwerken
 # ─────────────────────────────────────────────────────────────────────────────
 
 def zoek_csv_url(pagina: str, label: str, ssl: bool) -> str:
@@ -241,8 +240,8 @@ def zoek_csv_url(pagina: str, label: str, ssl: bool) -> str:
 
     raise RuntimeError(
         f"Dataset '{label} (CSV)' niet gevonden op de pagina. "
-        "Controleer de instelling 'CSV-label' of of de paginastructuur "
-        "van Toerisme Vlaanderen gewijzigd is."
+        "Controleer de instelling 'CSV-label' of de paginastructuur "
+        "van Toerisme Vlaanderen is gewijzigd."
     )
 
 
@@ -259,6 +258,7 @@ def download_csv(url: str, ssl: bool) -> bytes:
 def csv_naar_df(b: bytes, sep: str) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(b), sep=sep, dtype=str).fillna("")
 
+
 def filter_op_postcodes(df: pd.DataFrame, kolom: str, postcodes: list[str]) -> pd.DataFrame:
     if not kolom or kolom not in df.columns:
         return df
@@ -267,19 +267,19 @@ def filter_op_postcodes(df: pd.DataFrame, kolom: str, postcodes: list[str]) -> p
         df = df[df[kolom].str.strip().isin(postcodes)]
     return df
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Diff-berekening
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _changelog_rij(
-    datum: str, nr: str, naam: str,
-    wijz: str, kol: str, oud: str, nieuw: str,
-) -> dict:
+def _diff_rij(nr: str, naam: str, wijz: str, kol: str, oud: str, nieuw: str) -> dict:
     return {
-        "datum_check": datum, "is_laatste_check": True,
-        "registratienummer": nr, "naam": naam,
-        "wijziging_type": wijz, "kolom": kol,
-        "oude_waarde": oud, "nieuwe_waarde": nieuw,
+        "registratienummer": nr,
+        "naam":              naam,
+        "wijziging_type":    wijz,
+        "kolom":             kol,
+        "oude_waarde":       oud,
+        "nieuwe_waarde":     nieuw,
     }
 
 
@@ -305,9 +305,8 @@ def bereken_diff(
                 "Controleer de waarde van 'sleutelkolom' in config.toml."
             )
 
-    datum = date.today().strftime("%d-%m-%Y")
-    df_n  = df_n.copy()
-    df_o  = df_o.copy()
+    df_n = df_n.copy()
+    df_o = df_o.copy()
     df_n[sleutel] = df_n[sleutel].astype(str).str.strip()
     df_o[sleutel] = df_o[sleutel].astype(str).str.strip()
 
@@ -319,11 +318,11 @@ def bereken_diff(
 
     for nr in sorted(nrs_n - nrs_o):
         r = df_n.loc[df_n[sleutel] == nr].iloc[0]
-        rijen.append(_changelog_rij(datum, nr, _naam(r), "nieuw", "—", "—", "—"))
+        rijen.append(_diff_rij(nr, _naam(r), "nieuw", "—", "—", "—"))
 
     for nr in sorted(nrs_o - nrs_n):
         r = df_o.loc[df_o[sleutel] == nr].iloc[0]
-        rijen.append(_changelog_rij(datum, nr, _naam(r), "verdwenen", "—", "—", "—"))
+        rijen.append(_diff_rij(nr, _naam(r), "verdwenen", "—", "—", "—"))
 
     uitgesloten_set = set(uitgesloten) | {sleutel}
     diff_cols       = [c for c in df_n.columns if c not in uitgesloten_set]
@@ -339,29 +338,9 @@ def bereken_diff(
         for col in diff_cols:
             oud, nieuw = str(r_o.get(col, "")), str(r_n.get(col, ""))
             if oud != nieuw:
-                rijen.append(_changelog_rij(datum, nr, naam, "gewijzigd", col, oud, nieuw))
+                rijen.append(_diff_rij(nr, naam, "gewijzigd", col, oud, nieuw))
 
-    return pd.DataFrame(rijen) if rijen else pd.DataFrame(columns=CHANGELOG_KOLOMMEN)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Changelog bijwerken
-# ─────────────────────────────────────────────────────────────────────────────
-
-def update_changelog(df_nieuw: pd.DataFrame, bestaand: bytes | None) -> bytes:
-    """
-    Voeg nieuwe diff-rijen toe aan de changelog.
-    Zet is_laatste_check van alle vorige rijen op False.
-    """
-    if bestaand:
-        df_oud = pd.read_excel(io.BytesIO(bestaand), dtype=str)
-        df_oud["is_laatste_check"] = False
-        gecombineerd = pd.concat([df_oud, df_nieuw], ignore_index=True)
-    else:
-        gecombineerd = df_nieuw.copy()
-    buf = io.BytesIO()
-    gecombineerd.to_excel(buf, index=False, engine="openpyxl")
-    return buf.getvalue()
+    return pd.DataFrame(rijen) if rijen else pd.DataFrame(columns=DIFF_KOLOMMEN)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -383,7 +362,7 @@ def _sessie_init() -> None:
         "pipeline_klaar":     False,
         "eerste_gebruik":     False,
         "vandaag_opgeslagen": False,
-        "diff_vandaag":       pd.DataFrame(columns=CHANGELOG_KOLOMMEN),
+        "diff_vandaag":       pd.DataFrame(columns=DIFF_KOLOMMEN),
     }
     for k, v in standaard.items():
         if k not in st.session_state:
@@ -399,18 +378,19 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
     Kernlogica die eenmalig wordt uitgevoerd bij het eerste paginabezoek.
 
     Stap 1 — Controleer of er al een archief is voor vandaag.
-      Ja  → laad het bestaande archief; niets meer te doen.
-      Nee → download de nieuwste versie, bereken de diff, werk de changelog
-            bij en sla de versie op als archief en als huidige momentopname.
+      Ja  → laad het bestaande archief; klaar.
+      Nee → download de nieuwste versie van Toerisme Vlaanderen, sla ze op
+            als archief en als huidige momentopname, en ruim verouderde
+            archieven op.
     """
-    vandaag = date.today()
-    ssl     = cfg["netwerk"]["ssl_verificatie"]
-    sep     = cfg["bron"]["csv_scheidingsteken"]
-    sleutel = cfg["kolommen"]["sleutelkolom"]
-    naam_k  = cfg["kolommen"]["naamkolom"]
-    uitgesl = cfg["kolommen"]["uitgesloten_kolommen"]
-    postcode_k   = cfg["kolommen"].get("postcode_kolom", "")
-    postcodes    = [str(p) for p in cfg["kolommen"].get("postcodes", [])]
+    vandaag    = date.today()
+    ssl        = cfg["netwerk"]["ssl_verificatie"]
+    sep        = cfg["bron"]["csv_scheidingsteken"]
+    sleutel    = cfg["kolommen"]["sleutelkolom"]
+    naam_k     = cfg["kolommen"]["naamkolom"]
+    uitgesl    = cfg["kolommen"]["uitgesloten_kolommen"]
+    postcode_k = cfg["kolommen"].get("postcode_kolom", "")
+    postcodes  = [str(p) for p in cfg["kolommen"].get("postcodes", [])]
 
     try:
         _log("Beschikbare archieven ophalen...")
@@ -419,7 +399,7 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
         _log(f"{len(datums)} archiefversie(s) beschikbaar.")
 
         if vandaag in datums:
-            # Today already has an archive — load it, nothing else to do
+            # Vandaag al een archief — gewoon laden
             _log(f"Versie van vandaag ({vandaag.strftime('%d-%m-%Y')}) bestaat al — laden...")
             inhoud = opslag.lees(archief_pad(vandaag))
             if inhoud:
@@ -431,7 +411,7 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             st.session_state.vandaag_opgeslagen = False
 
         else:
-            # No archive yet for today — download and process
+            # Nog geen archief voor vandaag — downloaden en opslaan
             _log("Actuele versie downloaden van Toerisme Vlaanderen...")
             url = zoek_csv_url(
                 cfg["bron"]["datasets_pagina_url"],
@@ -441,32 +421,22 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             _log("Download-URL gevonden.")
             csv_bytes = download_csv(url, ssl)
             df_nieuw  = csv_naar_df(csv_bytes, sep)
-            df_nieuw = filter_op_postcodes(df_nieuw, postcode_k, postcodes)
+            df_nieuw  = filter_op_postcodes(df_nieuw, postcode_k, postcodes)
             gefilterd_bytes = df_nieuw.to_csv(index=False, sep=sep).encode("utf-8")
             _log(f"Gedownload: {len(df_nieuw):,} rijen.")
 
+            # Bereken diff t.o.v. vorige versie (enkel voor de statusmelding)
             vorige = opslag.lees(PAD_HUIDIG)
-
             if vorige is None:
                 _log("Geen vorige momentopname gevonden — dit is het eerste gebruik.", "warn")
                 st.session_state.eerste_gebruik = True
-                diff_df = pd.DataFrame(columns=CHANGELOG_KOLOMMEN)
+                diff_df = pd.DataFrame(columns=DIFF_KOLOMMEN)
             else:
                 _log("Vergelijken met vorige versie...")
                 df_oud  = csv_naar_df(vorige, sep)
                 df_oud  = filter_op_postcodes(df_oud, postcode_k, postcodes)
                 diff_df = bereken_diff(df_nieuw, df_oud, sleutel, naam_k, uitgesl)
-                n = len(diff_df)
-                _log(f"Diff berekend: {n:,} wijziging(en) gevonden.", "ok")
-
-                if not diff_df.empty:
-                    _log("Changelog bijwerken...")
-                    opslag.schrijf(
-                        PAD_CHANGELOG,
-                        update_changelog(diff_df, opslag.lees(PAD_CHANGELOG)),
-                        f"Changelog bijgewerkt op {vandaag}",
-                    )
-                    _log("Changelog opgeslagen.")
+                _log(f"Diff berekend: {len(diff_df):,} wijziging(en) t.o.v. vorige versie.", "ok")
 
             _log("Nieuwe versie opslaan in repository...")
             opslag.schrijf(archief_pad(vandaag), gefilterd_bytes, f"Archief: {vandaag}")
@@ -477,10 +447,9 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
             if verwijderd:
                 _log(f"Opruimen: {len(verwijderd)} verouderd(e) archief/archieven verwijderd.")
 
-            # Refresh archive list after changes
-            st.session_state.archief_datums   = beschikbare_datums(opslag)
-            st.session_state.huidig_df        = df_nieuw
-            st.session_state.diff_vandaag     = diff_df
+            st.session_state.archief_datums     = beschikbare_datums(opslag)
+            st.session_state.huidig_df          = df_nieuw
+            st.session_state.diff_vandaag       = diff_df
             st.session_state.vandaag_opgeslagen = True
 
         st.session_state.pipeline_klaar = True
@@ -496,6 +465,80 @@ def run_pipeline(opslag: GitHubOpslag, cfg: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Hulpfunctie: vergelijkingsresultaten tonen
+# ─────────────────────────────────────────────────────────────────────────────
+
+def toon_vergelijking(
+    df_huidig: pd.DataFrame,
+    df_vergelijk: pd.DataFrame,
+    vergelijk_label: str,
+    bestandsnaam: str,
+    cfg: dict,
+) -> None:
+    """Bereken en toon de diff tussen twee registerversies."""
+    try:
+        diff = bereken_diff(
+            df_huidig,
+            df_vergelijk,
+            cfg["kolommen"]["sleutelkolom"],
+            cfg["kolommen"]["naamkolom"],
+            cfg["kolommen"]["uitgesloten_kolommen"],
+        )
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+
+    datum_huidig = date.today().strftime("%d-%m-%Y")
+    st.markdown(f"**Huidige versie** ({datum_huidig}) t.o.v. **{vergelijk_label}**")
+
+    if diff.empty:
+        st.success("✅ Geen wijzigingen gevonden tussen deze twee versies.")
+        return
+
+    n_nieuw     = int((diff["wijziging_type"] == "nieuw").sum())
+    n_verdwenen = int((diff["wijziging_type"] == "verdwenen").sum())
+    n_gewijzigd = int((diff["wijziging_type"] == "gewijzigd").sum())
+
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("🆕 Nieuw",             n_nieuw,
+               help="Nieuw toegevoegde logies")
+    mc2.metric("🗑️ Verdwenen",         n_verdwenen,
+               help="Verwijderde of uitgeschreven logies")
+    mc3.metric("✏️ Gewijzigde velden", n_gewijzigd,
+               help="Aantal gewijzigde veldwaarden over alle logies")
+
+    weergave_df = diff.rename(columns={
+        "registratienummer": "Registratienummer",
+        "naam":              "Naam",
+        "wijziging_type":    "Type",
+        "kolom":             "Kolom",
+        "oude_waarde":       "Vorige waarde",
+        "nieuwe_waarde":     "Nieuwe waarde",
+    })
+
+    st.dataframe(
+        weergave_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Type":          st.column_config.TextColumn(width="small"),
+            "Kolom":         st.column_config.TextColumn(width="medium"),
+            "Vorige waarde": st.column_config.TextColumn(width="large"),
+            "Nieuwe waarde": st.column_config.TextColumn(width="large"),
+        },
+    )
+
+    buf = io.BytesIO()
+    diff.to_excel(buf, index=False, engine="openpyxl")
+    st.download_button(
+        "📥 Download dit overzicht als Excel",
+        buf.getvalue(),
+        bestandsnaam,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Streamlit-pagina
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -508,7 +551,7 @@ st.set_page_config(
 _sessie_init()
 cfg_standaard = laad_config()
 
-# ── Zijpaneel: instellingen ───────────────────────────────────────────────────
+# ── Zijpaneel ────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("⚙️ Instellingen")
@@ -539,7 +582,7 @@ with st.sidebar:
         "of als u een aangepaste URL wilt toepassen."
     )
 
-# Build the active session config: only the source URL can be overridden via the sidebar.
+# Actieve configuratie — alleen de bron-URL is overschrijfbaar via het zijpaneel
 cfg_sessie: dict[str, Any] = {
     "bron": {
         "datasets_pagina_url": pagina_url,
@@ -573,10 +616,10 @@ if not st.session_state.pipeline_klaar:
     st.markdown("### ⏳ Basisregister wordt gecontroleerd…")
     st.warning(
         "**Als dit de eerste controle van de dag is, wordt het volledige register gedownload "
-        "en veld voor veld vergeleken met de vorige versie.**\n\n"
-        "Dit kan even duren, afhankelijk van de bestandsgrootte en de "
-        "verbindingssnelheid. De pagina laadt automatisch opnieuw zodra de verwerking "
-        "voltooid is — sluit dit venster of tabblad niet."
+        "en opgeslagen als nieuwe archiefversie.**\n\n"
+        "Dit kan **5 à 10 minuten** duren, afhankelijk van de verbindingssnelheid. "
+        "De pagina laadt automatisch opnieuw zodra de verwerking voltooid is — "
+        "sluit dit venster of tabblad niet."
     )
     with st.spinner("Downloaden en verwerken — even geduld…"):
         run_pipeline(opslag, cfg_sessie)
@@ -616,174 +659,172 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Status", status_tekst)
 col2.metric("Beschikbare archieven", len(archief_datums))
 col3.metric(
-    "Wijzigingen gevonden vandaag",
+    "Wijzigingen t.o.v. vorige versie",
     len(st.session_state.diff_vandaag) if st.session_state.vandaag_opgeslagen else "—",
+    help=(
+        "Aantal gedetecteerde wijzigingen bij de vergelijking van de zojuist gedownloade "
+        "versie met de meest recente vorige opslag. Alleen zichtbaar na een nieuwe download."
+    ),
 )
 
 st.divider()
 
 
-# ── Downloads ─────────────────────────────────────────────────────────────────
+# ── Registerwijzigingen controleren ──────────────────────────────────────────
 
-dcol1, dcol2 = st.columns(2)
+st.subheader("Registerwijzigingen controleren")
+st.caption(
+    "Vergelijk de huidige registerversie met een eerder opgeslagen archiefversie "
+    "of met een bestand dat u zelf heeft gedownload. Kies de datum van uw vorige "
+    "controle als vergelijkingsbasis om alle tussentijdse wijzigingen in één overzicht te zien."
+)
 
-with dcol1:
-    changelog_bytes = opslag.lees(PAD_CHANGELOG)
-    if changelog_bytes:
-        st.download_button(
-            "📥 Download volledige changelog",
-            changelog_bytes,
-            "changelog.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Alle historische wijzigingen als Excel-bestand.",
+if st.session_state.huidig_df is None:
+    st.error("Huidige versie is niet geladen. Klik op 'Sessie opnieuw starten'.")
+    st.stop()
+
+vergelijk_modus = st.radio(
+    "Vergelijk met:",
+    ["Archiefversie", "Zelf geüpload bestand"],
+    horizontal=True,
+    help=(
+        "Kies 'Archiefversie' om te vergelijken met een versie die door deze tool is opgeslagen. "
+        "Kies 'Zelf geüpload bestand' als u een eerder gedownloade registerversie van uw eigen "
+        "computer wilt gebruiken als vergelijkingsbasis."
+    ),
+)
+
+sep = cfg_sessie["bron"]["csv_scheidingsteken"]
+
+# ── Modus A: Archiefversie ────────────────────────────────────────────────────
+
+if vergelijk_modus == "Archiefversie":
+
+    vergelijk_opties = [d for d in archief_datums if d != vandaag]
+
+    if not vergelijk_opties:
+        if st.session_state.eerste_gebruik:
+            st.info(
+                "Dit is het eerste gebruik van de tool. Er zijn nog geen eerdere "
+                "archiefversies beschikbaar om mee te vergelijken."
+            )
+        else:
+            st.info("Er zijn geen eerdere archiefversies beschikbaar.")
+
+    else:
+        label_naar_datum = {d.strftime("%d-%m-%Y"): d for d in vergelijk_opties}
+
+        geselecteerd_label = st.selectbox(
+            "Selecteer archiefversie:",
+            options=list(label_naar_datum.keys()),
+            index=0,
+            help=(
+                "Kies de datum van uw vorige controle. Alle wijzigingen die sindsdien "
+                "zijn opgetreden — over meerdere tussenliggende versies heen — worden "
+                "in één overzicht getoond."
+            ),
+        )
+        geselecteerde_datum = label_naar_datum[geselecteerd_label]
+
+        # Laad archiefversie, gecachet per sessie
+        if geselecteerde_datum not in st.session_state.archief_cache:
+            _laad_info = st.info(
+                f"📂 Archiefversie van **{geselecteerd_label}** wordt opgehaald uit de "
+                "repository. Dit kan 1 à 2 minuten duren — even geduld…"
+            )
+            with st.spinner(f"Archiefversie van {geselecteerd_label} laden…"):
+                try:
+                    b = opslag.lees(archief_pad(geselecteerde_datum))
+                    if b:
+                        df_arch = csv_naar_df(b, sep)
+                        df_arch = filter_op_postcodes(
+                            df_arch,
+                            cfg_sessie["kolommen"].get("postcode_kolom", ""),
+                            [str(p) for p in cfg_sessie["kolommen"].get("postcodes", [])],
+                        )
+                        st.session_state.archief_cache[geselecteerde_datum] = df_arch
+                    else:
+                        st.session_state.archief_cache[geselecteerde_datum] = None
+                except Exception as exc:
+                    st.error(f"Kon archief van {geselecteerd_label} niet laden: {exc}")
+                    st.session_state.archief_cache[geselecteerde_datum] = None
+            _laad_info.empty()
+
+        df_archief = st.session_state.archief_cache.get(geselecteerde_datum)
+
+        if df_archief is None:
+            st.error(f"Archiefversie van {geselecteerd_label} kon niet worden geladen.")
+        else:
+            toon_vergelijking(
+                df_huidig     = st.session_state.huidig_df,
+                df_vergelijk  = df_archief,
+                vergelijk_label = f"archiefversie van {geselecteerd_label}",
+                bestandsnaam  = (
+                    f"vergelijking_{geselecteerde_datum.isoformat()}"
+                    f"_vs_{vandaag.isoformat()}.xlsx"
+                ),
+                cfg = cfg_sessie,
+            )
+
+# ── Modus B: Zelf geüpload bestand ───────────────────────────────────────────
+
+else:
+    geupload = st.file_uploader(
+        "Upload een eerder gedownloade registerversie (CSV)",
+        type=["csv"],
+        help=(
+            "Upload een CSV-bestand dat u eerder heeft gedownload via de knop "
+            "'Download huidige registerversie als CSV' onderaan deze pagina. "
+            "Het bestand wordt niet opgeslagen — de vergelijking vindt alleen "
+            "lokaal in uw browsersessie plaats."
+        ),
+    )
+
+    if geupload is None:
+        st.info(
+            "Upload een eerder gedownloade registerversie om de vergelijking te starten."
         )
     else:
-        st.caption("Changelog nog niet beschikbaar (nog geen wijzigingen geregistreerd).")
+        try:
+            df_upload = csv_naar_df(geupload.read(), sep)
+            df_upload = filter_op_postcodes(
+                df_upload,
+                cfg_sessie["kolommen"].get("postcode_kolom", ""),
+                [str(p) for p in cfg_sessie["kolommen"].get("postcodes", [])],
+            )
+        except Exception as exc:
+            st.error(f"Kon het geüploade bestand niet verwerken: {exc}")
+            df_upload = None
 
-with dcol2:
-    if st.session_state.huidig_df is not None:
-        buf_huidig = io.BytesIO()
-        st.session_state.huidig_df.to_csv(
-            buf_huidig, index=False,
-            sep=cfg_sessie["bron"]["csv_scheidingsteken"],
-        )
-        st.download_button(
-            "📥 Download huidige registerversie als CSV",
-            buf_huidig.getvalue(),
-            f"basisregister_{vandaag.isoformat()}.csv",
-            "text/csv",
-            help="De versie van het register die vandaag is opgeslagen.",
-        )
+        if df_upload is not None:
+            basis        = re.sub(r"[^\w\-]", "_", geupload.name.rsplit(".", 1)[0])
+            bestandsnaam = f"vergelijking_{basis}_vs_{vandaag.isoformat()}.xlsx"
+
+            toon_vergelijking(
+                df_huidig       = st.session_state.huidig_df,
+                df_vergelijk    = df_upload,
+                vergelijk_label = f"geüpload bestand '{geupload.name}'",
+                bestandsnaam    = bestandsnaam,
+                cfg             = cfg_sessie,
+            )
+
+
+# ── Download huidige registerversie ──────────────────────────────────────────
 
 st.divider()
 
-
-# ── Vergelijkingsviewer ───────────────────────────────────────────────────────
-
-st.subheader("Versies vergelijken")
-
-vergelijk_opties = [d for d in archief_datums if d != vandaag]
-
-if not vergelijk_opties:
-    if st.session_state.eerste_gebruik:
-        st.info(
-            "Dit is de eerste keer dat het register is opgeslagen. "
-            "Er zijn nog geen eerdere versies beschikbaar om mee te vergelijken."
-        )
-    else:
-        st.info("Er zijn geen eerdere archiefversies beschikbaar.")
-else:
-    label_naar_datum = {d.strftime("%d-%m-%Y"): d for d in vergelijk_opties}
-
-    geselecteerd_label = st.selectbox(
-        "Vergelijk huidige versie met archiefversie van:",
-        options=list(label_naar_datum.keys()),
-        index=0,
-        help=(
-            "Selecteer een datum om de huidige versie te vergelijken met die dag. "
-            "Handig als u het register al een tijdje niet heeft bekeken: kies dan "
-            "de datum van uw laatste controle om alle tussentijdse wijzigingen te zien."
-        ),
-    )
-    geselecteerde_datum = label_naar_datum[geselecteerd_label]
-
-    # Load selected archive, cached per session to avoid repeated API calls
-    if geselecteerde_datum not in st.session_state.archief_cache:
-        _laad_info = st.info(
-            f"📂 Archiefversie van **{geselecteerd_label}** wordt opgehaald uit de repository. "
-            "Dit kan even duren — even geduld…"
-        )
-        with st.spinner(f"Archiefversie van {geselecteerd_label} laden…"):
-            try:
-                b = opslag.lees(archief_pad(geselecteerde_datum))
-                if b:
-                    df_arch = csv_naar_df(b, cfg_sessie["bron"]["csv_scheidingsteken"])
-                    df_arch = filter_op_postcodes(
-                        df_arch,
-                        cfg_sessie["kolommen"].get("postcode_kolom", ""),
-                        [str(p) for p in cfg_sessie["kolommen"].get("postcodes", [])],
-                    )
-                    st.session_state.archief_cache[geselecteerde_datum] = df_arch
-                else:
-                    st.session_state.archief_cache[geselecteerde_datum] = None
-            except Exception as exc:
-                st.error(f"Kon archief van {geselecteerd_label} niet laden: {exc}")
-                st.session_state.archief_cache[geselecteerde_datum] = None
-        _laad_info.empty()
-
-    df_archief = st.session_state.archief_cache.get(geselecteerde_datum)
-
-    if df_archief is None:
-        st.error(f"Archiefversie van {geselecteerd_label} is niet beschikbaar.")
-    elif st.session_state.huidig_df is None:
-        st.error("Huidige versie is niet geladen. Klik op 'Sessie opnieuw starten'.")
-    else:
-        try:
-            diff_vgl = bereken_diff(
-                st.session_state.huidig_df,
-                df_archief,
-                cfg_sessie["kolommen"]["sleutelkolom"],
-                cfg_sessie["kolommen"]["naamkolom"],
-                cfg_sessie["kolommen"]["uitgesloten_kolommen"],
-            )
-        except ValueError as exc:
-            st.error(str(exc))
-            st.stop()
-
-        datum_huidig = vandaag.strftime("%d-%m-%Y")
-        st.markdown(
-            f"**Huidige versie** ({datum_huidig}) "
-            f"t.o.v. **archiefversie van {geselecteerd_label}**"
-        )
-
-        if diff_vgl.empty:
-            st.success("✅ Geen wijzigingen gevonden tussen deze twee versies.")
-        else:
-            n_nieuw     = int((diff_vgl["wijziging_type"] == "nieuw").sum())
-            n_verdwenen = int((diff_vgl["wijziging_type"] == "verdwenen").sum())
-            n_gewijzigd = int((diff_vgl["wijziging_type"] == "gewijzigd").sum())
-
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("🆕 Nieuw",              n_nieuw,
-                       help="Nieuw toegevoegde logies")
-            mc2.metric("🗑️ Verdwenen",          n_verdwenen,
-                       help="Verwijderde of uitgeschreven logies")
-            mc3.metric("✏️ Gewijzigde velden",  n_gewijzigd,
-                       help="Aantal gewijzigde veldwaarden over alle logies")
-
-            weergave_df = diff_vgl[[
-                "registratienummer", "naam", "wijziging_type",
-                "kolom", "oude_waarde", "nieuwe_waarde",
-            ]].rename(columns={
-                "registratienummer": "Registratienummer",
-                "naam":              "Naam",
-                "wijziging_type":    "Type",
-                "kolom":             "Kolom",
-                "oude_waarde":       "Vorige waarde",
-                "nieuwe_waarde":     "Nieuwe waarde",
-            })
-
-            st.dataframe(
-                weergave_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Type":           st.column_config.TextColumn(width="small"),
-                    "Kolom":          st.column_config.TextColumn(width="medium"),
-                    "Vorige waarde":  st.column_config.TextColumn(width="large"),
-                    "Nieuwe waarde":  st.column_config.TextColumn(width="large"),
-                },
-            )
-
-            buf_xlsx = io.BytesIO()
-            diff_vgl.to_excel(buf_xlsx, index=False, engine="openpyxl")
-            st.download_button(
-                "📥 Download dit overzicht als Excel",
-                buf_xlsx.getvalue(),
-                f"vergelijking_{geselecteerde_datum.isoformat()}"
-                f"_vs_{vandaag.isoformat()}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+buf_huidig = io.BytesIO()
+st.session_state.huidig_df.to_csv(buf_huidig, index=False, sep=sep)
+st.download_button(
+    "📥 Download huidige registerversie als CSV",
+    buf_huidig.getvalue(),
+    f"basisregister_{vandaag.isoformat()}.csv",
+    "text/csv",
+    help=(
+        "Sla deze versie lokaal op als u haar later wilt gebruiken als "
+        "vergelijkingsbasis via 'Zelf geüpload bestand'."
+    ),
+)
 
 
 # ── Uitvoeringslog ────────────────────────────────────────────────────────────
