@@ -4,7 +4,7 @@ app.py — Basisregister Monitor
 Streamlit-applicatie voor het bewaken van wijzigingen in het
 Basisregister Vlaams Logiesaanbod (Toerisme Vlaanderen).
 
-Versie:  2.0
+Versie:  2.1
 Opslag:  Privé GitHub-repository via REST API
 Hosting: Streamlit Community Cloud
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import re
 import warnings
 from datetime import date, datetime, timedelta
@@ -21,6 +22,7 @@ from typing import Any
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -31,6 +33,12 @@ except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
     except ImportError:
         tomllib = None  # type: ignore[assignment]
+
+try:
+    import folium
+    FOLIUM_BESCHIKBAAR = True
+except ImportError:
+    FOLIUM_BESCHIKBAAR = False
 
 warnings.filterwarnings("ignore")
 
@@ -46,6 +54,39 @@ DIFF_KOLOMMEN = [
     "registratienummer", "naam", "wijziging_type",
     "kolom", "oude_waarde", "nieuwe_waarde",
 ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constanten — kaartvisualisatie
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Kleur per discriminator-waarde (API-sleutels, niet de weergavenamen)
+DISC_KLEUREN: dict[str, str] = {
+    "BED_AND_BREAKFAST":   "#a65628",
+    "CAMPSITE":            "#4daf4a",
+    "HOLIDAY_COTTAGE":     "#f781bf",
+    "HOSTEL":              "#984ea3",
+    "HOTEL":               "#377eb8",
+    "MOTOR_HOME_TERRAIN":  "#4daf4a",
+    "TOURIST_RESIDENCE":   "#e41a1c",
+    "VACATION_PARK":       "#ff7f00",
+    "YOUTH_ACCOMMODATION": "#ff7f00",
+}
+
+# Leesbare Nederlandse labels voor de legenda
+_DISC_LABELS: dict[str, str] = {
+    "BED_AND_BREAKFAST":   "B&B",
+    "CAMPSITE":            "Camping",
+    "HOLIDAY_COTTAGE":     "Vakantiewoning",
+    "HOSTEL":              "Hostel",
+    "HOTEL":               "Hotel",
+    "MOTOR_HOME_TERRAIN":  "Camperterrein",
+    "TOURIST_RESIDENCE":   "Kamergerelateerde logies",
+    "VACATION_PARK":       "Vakantiepark",
+    "YOUTH_ACCOMMODATION": "Jeugdverblijf",
+}
+
+_SIZE_BUCKETS  = ["1", "2–9", "10–30", "31–75", "76–100", "101+"]
+_SIZE_RADII_PX = [4, 6, 9, 12, 15, 18]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,6 +382,292 @@ def bereken_diff(
                 rijen.append(_diff_rij(nr, naam, "gewijzigd", col, oud, nieuw))
 
     return pd.DataFrame(rijen) if rijen else pd.DataFrame(columns=DIFF_KOLOMMEN)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Kaartvisualisatie
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _coord_normaliseer(val: Any, lo: float, hi: float) -> float | None:
+    """
+    Normaliseer een coördinaatwaarde naar het bereik [lo, hi].
+    Corrigeert het verschoven formaat dat soms in het register voorkomt.
+    Geeft None terug bij een ongeldige of lege waarde.
+    """
+    try:
+        v = float(str(val).replace(",", "."))
+        if v == 0 or pd.isna(v):
+            return None
+        while v >= hi * 10:
+            v /= 10
+        if not (lo - 2 < v < hi + 2):
+            return None
+        return v
+    except (ValueError, TypeError):
+        return None
+
+
+def _eenheid_straal(n: int) -> int:
+    """Geeft de cirkelstraal in pixels terug op basis van het aantal eenheden."""
+    for grens, straal in zip([1, 9, 30, 75, 100], _SIZE_RADII_PX):
+        if n <= grens:
+            return straal
+    return _SIZE_RADII_PX[-1]
+
+
+def _eenheid_bucket(n: int) -> str:
+    """Deelt het aantal eenheden in een groottecategorie in voor de legenda."""
+    for grens, bucket in zip([1, 9, 30, 75, 100], _SIZE_BUCKETS):
+        if n <= grens:
+            return bucket
+    return _SIZE_BUCKETS[-1]
+
+
+def _popup_html(rij: pd.Series, naam: str) -> str:
+    """
+    Bouw een scrollbare HTML-tabel met alle niet-lege veldwaarden van de rij.
+    Wordt getoond als popup bij klikken op een markering.
+    """
+    def _esc(s: str) -> str:
+        return (
+            str(s)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    rijen_html = "".join(
+        f'<tr>'
+        f'<td style="color:#777;padding:2px 8px 2px 0;vertical-align:top;'
+        f'white-space:nowrap;font-weight:600">{_esc(kol)}</td>'
+        f'<td style="padding:2px 0;word-break:break-word">{_esc(waarde)}</td>'
+        f'</tr>'
+        for kol, waarde in rij.items()
+        if str(waarde).strip() not in ("", "nan", "None", "NaN")
+    )
+    return (
+        f'<div style="font-family:Arial,sans-serif;min-width:260px;max-width:380px">'
+        f'<b style="font-size:13px">{_esc(naam)}</b>'
+        f'<div style="max-height:300px;overflow-y:auto;margin-top:6px">'
+        f'<table style="font-size:11px;border-collapse:collapse;width:100%">'
+        f'{rijen_html}'
+        f'</table></div></div>'
+    )
+
+
+def maak_kaart(df: pd.DataFrame, naam_kol: str = "name") -> "folium.Map | None":
+    """
+    Bouw een interactieve Folium-kaart van alle logies in df.
+
+    - Cirkels geschaald naar aantal eenheden, gekleurd per logiestype.
+    - Klik op een markering voor een scrollbare popup met alle registergegevens.
+    - Interactieve legenda rechtsonder: klik om te filteren op type of grootte.
+
+    Geeft None terug als folium niet beschikbaar is of er geen geldige
+    coördinaten in de data aanwezig zijn.
+    """
+    if not FOLIUM_BESCHIKBAAR:
+        return None
+
+    # Kolommen automatisch opzoeken op naam (case-insensitive)
+    col_lower    = {c.lower(): c for c in df.columns}
+    lat_kol      = col_lower.get("lat") or col_lower.get("latitude")
+    lon_kol      = (col_lower.get("lon") or col_lower.get("long")
+                    or col_lower.get("lng") or col_lower.get("longitude"))
+    disc_kol     = col_lower.get("discriminator")
+    eenh_kol     = col_lower.get("number_of_units")
+
+    if not lat_kol or not lon_kol:
+        return None
+
+    df = df.copy()
+    df["__lat"] = df[lat_kol].apply(lambda v: _coord_normaliseer(v, 49.0, 52.0))
+    df["__lon"] = df[lon_kol].apply(lambda v: _coord_normaliseer(v,  2.0,  7.0))
+    df = df.dropna(subset=["__lat", "__lon"])
+
+    if df.empty:
+        return None
+
+    m = folium.Map(
+        location=[df["__lat"].median(), df["__lon"].median()],
+        zoom_start=13,
+        tiles="CartoDB positron",
+    )
+
+    # Markerdata voor de JS-legenda (disc + bucket per marker, in volgorde van toevoeging)
+    markers_data: list[dict] = []
+
+    for _, rij in df.iterrows():
+        disc_raw = (
+            str(rij[disc_kol]).strip()
+            if disc_kol and str(rij.get(disc_kol, "")).strip() not in ("", "nan")
+            else "ONBEKEND"
+        )
+        disc_label = _DISC_LABELS.get(disc_raw, disc_raw.replace("_", " ").title())
+
+        try:
+            n_eenh = int(float(str(rij[eenh_kol]))) if eenh_kol else 1
+        except (ValueError, TypeError):
+            n_eenh = 1
+
+        naam   = str(rij.get(naam_kol, "—")) or "—"
+        kleur  = DISC_KLEUREN.get(disc_raw, "#888888")
+        bucket = _eenheid_bucket(n_eenh)
+
+        # Verwijder interne hulpkolommen vóór de popup
+        rij_clean = rij.drop(labels=["__lat", "__lon"], errors="ignore")
+
+        cm = folium.CircleMarker(
+            location=[rij["__lat"], rij["__lon"]],
+            radius=_eenheid_straal(n_eenh),
+            color=kleur,
+            fill=True,
+            fill_color=kleur,
+            fill_opacity=0.75,
+            weight=1.5,
+        )
+        cm.add_child(folium.Popup(_popup_html(rij_clean, naam), max_width=400))
+        cm.add_child(folium.Tooltip(
+            f"{naam} · {disc_label} · "
+            f"{n_eenh} {'eenheid' if n_eenh == 1 else 'eenheden'}"
+        ))
+        cm.add_to(m)
+
+        markers_data.append({"disc": disc_raw, "bucket": bucket})
+
+    # ── Interactieve legenda ──────────────────────────────────────────────────
+    map_var = m.get_name()
+
+    # Alleen de typen die daadwerkelijk in de data voorkomen
+    disc_typen        = sorted(set(d["disc"] for d in markers_data))
+    disc_kleur_subset = {k: DISC_KLEUREN.get(k, "#888888") for k in disc_typen}
+    disc_label_subset = {
+        k: _DISC_LABELS.get(k, k.replace("_", " ").title())
+        for k in disc_typen
+    }
+
+    legende_html = f"""
+<style>
+  .leg-panel{{
+    position:fixed;bottom:30px;right:30px;z-index:9999;
+    background:white;border-radius:8px;padding:10px 13px;
+    box-shadow:0 2px 14px rgba(0,0,0,.18);font-family:Arial,sans-serif;
+    min-width:165px;max-height:90vh;overflow-y:auto;
+  }}
+  .leg-title{{
+    font-weight:700;font-size:10px;margin-bottom:4px;color:#555;
+    text-transform:uppercase;letter-spacing:.06em;
+  }}
+  .leg-sep{{border:none;border-top:1px solid #eee;margin:7px 0;}}
+  .leg-item{{
+    display:flex;align-items:center;margin-bottom:3px;cursor:pointer;
+    user-select:none;border-radius:4px;padding:2px 4px;transition:background .12s;
+  }}
+  .leg-item:hover{{background:#f2f2f2;}}
+  .leg-item.inactive{{opacity:.28;}}
+  .disc-dot{{
+    display:inline-block;border-radius:50%;width:9px;height:9px;
+    margin-right:6px;border:1.5px solid rgba(0,0,0,.2);flex-shrink:0;
+  }}
+  .size-dot{{
+    display:inline-block;border-radius:50%;
+    background:#666;border:1.5px solid #444;flex-shrink:0;
+  }}
+  .leg-label{{font-size:10px;color:#333;}}
+</style>
+
+<div class="leg-panel">
+  <div class="leg-title">Logiestype</div>
+  <div id="disc-legend"></div>
+  <hr class="leg-sep">
+  <div class="leg-title">Aantal eenheden</div>
+  <div id="size-legend"></div>
+</div>
+
+<script>
+(function(){{
+  var markersData      = {json.dumps(markers_data)};
+  var kleurMap         = {json.dumps(disc_kleur_subset)};
+  var labelMap         = {json.dumps(disc_label_subset)};
+  var discTypen        = {json.dumps(disc_typen)};
+  var sizeBuckets      = {json.dumps(_SIZE_BUCKETS)};
+  var sizeRadii        = {json.dumps(_SIZE_RADII_PX)};
+
+  var activeDiscs  = new Set(discTypen);
+  var activeSizes  = new Set(sizeBuckets);
+  var leafletMarkers = [];
+
+  function init() {{
+    var mapObj = window["{map_var}"];
+    if (!mapObj) {{ setTimeout(init, 250); return; }}
+
+    // Verzamel alle CircleMarker-lagen in volgorde van toevoeging
+    mapObj.eachLayer(function(layer) {{
+      if (layer instanceof L.CircleMarker) leafletMarkers.push(layer);
+    }});
+
+    // Koppel filterattributen aan elke marker (zelfde volgorde als markersData)
+    for (var i = 0; i < Math.min(leafletMarkers.length, markersData.length); i++) {{
+      leafletMarkers[i]._disc   = markersData[i].disc;
+      leafletMarkers[i]._bucket = markersData[i].bucket;
+    }}
+
+    buildDiscLegend(mapObj);
+    buildSizeLegend(mapObj);
+  }}
+
+  function applyFilters(mapObj) {{
+    leafletMarkers.forEach(function(c) {{
+      var show = activeDiscs.has(c._disc) && activeSizes.has(c._bucket);
+      if (show  && !mapObj.hasLayer(c)) mapObj.addLayer(c);
+      if (!show &&  mapObj.hasLayer(c)) mapObj.removeLayer(c);
+    }});
+  }}
+
+  function buildDiscLegend(mapObj) {{
+    var el = document.getElementById('disc-legend');
+    discTypen.forEach(function(disc) {{
+      var item = document.createElement('div');
+      item.className = 'leg-item';
+      item.innerHTML =
+        '<span class="disc-dot" style="background:' + (kleurMap[disc] || '#888') + '"></span>' +
+        '<span class="leg-label">' + (labelMap[disc] || disc) + '</span>';
+      item.addEventListener('click', function() {{
+        if (activeDiscs.has(disc)) {{ activeDiscs.delete(disc); item.classList.add('inactive'); }}
+        else                       {{ activeDiscs.add(disc);    item.classList.remove('inactive'); }}
+        applyFilters(mapObj);
+      }});
+      el.appendChild(item);
+    }});
+  }}
+
+  function buildSizeLegend(mapObj) {{
+    var el = document.getElementById('size-legend');
+    var maxDiam = sizeRadii[sizeRadii.length - 1] * 2;
+    sizeBuckets.forEach(function(bucket, i) {{
+      var r = sizeRadii[i], diam = r * 2;
+      var mL = (maxDiam - diam) / 2, mR = 9 + mL;
+      var item = document.createElement('div');
+      item.className = 'leg-item';
+      item.innerHTML =
+        '<span class="size-dot" style="width:' + diam + 'px;height:' + diam + 'px;' +
+        'margin-left:' + mL + 'px;margin-right:' + mR + 'px;"></span>' +
+        '<span class="leg-label">' + bucket + '</span>';
+      item.addEventListener('click', function() {{
+        if (activeSizes.has(bucket)) {{ activeSizes.delete(bucket); item.classList.add('inactive'); }}
+        else                         {{ activeSizes.add(bucket);    item.classList.remove('inactive'); }}
+        applyFilters(mapObj);
+      }});
+      el.appendChild(item);
+    }});
+  }}
+
+  setTimeout(init, 400);
+}})();
+</script>"""
+
+    m.get_root().html.add_child(folium.Element(legende_html))
+    return m
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -702,6 +1029,36 @@ col3.metric(
         "versie met de meest recente vorige opslag. Alleen zichtbaar na een nieuwe download."
     ),
 )
+
+st.divider()
+
+
+# ── Kaart ─────────────────────────────────────────────────────────────────────
+
+st.subheader("🗺️ Logiesoverzicht")
+st.caption(
+    "Alle logies uit de huidige registerversie op kaart. "
+    "Klik op een punt voor de volledige registergegevens. "
+    "Gebruik de legenda rechtsonder om te filteren op type of grootte."
+)
+
+if not FOLIUM_BESCHIKBAAR:
+    st.info(
+        "📦 Voeg `folium` toe aan `requirements.txt` om de kaart te tonen."
+    )
+elif st.session_state.huidig_df is not None:
+    with st.spinner("Kaart wordt opgebouwd…"):
+        kaart = maak_kaart(
+            st.session_state.huidig_df,
+            naam_kol=cfg_sessie["kolommen"]["naamkolom"],
+        )
+    if kaart is None:
+        st.warning(
+            "⚠️ Geen kaart beschikbaar — coördinatenkolommen (`lat` / `long`) "
+            "niet gevonden in het register, of alle coördinaten zijn ongeldig."
+        )
+    else:
+        components.html(kaart._repr_html_(), height=560)
 
 st.divider()
 
