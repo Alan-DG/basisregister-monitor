@@ -535,6 +535,25 @@ def maak_kaart(df: pd.DataFrame, naam_kol: str = "name") -> "folium.Map | None":
 
         markers_data.append({"disc": disc_raw, "bucket": bucket})
 
+    # ── Stadsgrens ────────────────────────────────────────────────────────────
+    # Laad leuven_boundary.geojson vanuit de repo-root (naast app.py).
+    # Geen fout als het bestand ontbreekt — kaart werkt gewoon zonder grens.
+    try:
+        with open("leuven_boundary.geojson", encoding="utf-8") as _f:
+            _grens = json.load(_f)
+        folium.GeoJson(
+            _grens,
+            name="Stadsgrens",
+            style_function=lambda x: {
+                "color":       "#333333",
+                "weight":      2,
+                "fillOpacity": 0,
+                "dashArray":   "6 4",
+            },
+        ).add_to(m)
+    except FileNotFoundError:
+        pass
+
     # ── Interactieve legenda ──────────────────────────────────────────────────
     map_var = m.get_name()
 
@@ -1033,36 +1052,6 @@ col3.metric(
 st.divider()
 
 
-# ── Kaart ─────────────────────────────────────────────────────────────────────
-
-st.subheader("🗺️ Logiesoverzicht")
-st.caption(
-    "Alle logies uit de huidige registerversie op kaart. "
-    "Klik op een punt voor de volledige registergegevens. "
-    "Gebruik de legenda rechtsonder om te filteren op type of grootte."
-)
-
-if not FOLIUM_BESCHIKBAAR:
-    st.info(
-        "📦 Voeg `folium` toe aan `requirements.txt` om de kaart te tonen."
-    )
-elif st.session_state.huidig_df is not None:
-    with st.spinner("Kaart wordt opgebouwd…"):
-        kaart = maak_kaart(
-            st.session_state.huidig_df,
-            naam_kol=cfg_sessie["kolommen"]["naamkolom"],
-        )
-    if kaart is None:
-        st.warning(
-            "⚠️ Geen kaart beschikbaar — coördinatenkolommen (`lat` / `long`) "
-            "niet gevonden in het register, of alle coördinaten zijn ongeldig."
-        )
-    else:
-        components.html(kaart._repr_html_(), height=560)
-
-st.divider()
-
-
 # ── Registerwijzigingen controleren ──────────────────────────────────────────
 
 st.subheader("Registerwijzigingen controleren")
@@ -1202,6 +1191,36 @@ else:
                 bestandsnaam    = bestandsnaam,
                 cfg             = cfg_sessie,
             )
+
+
+# ── Kaart ─────────────────────────────────────────────────────────────────────
+
+st.divider()
+
+st.subheader("🗺️ Logiesoverzicht")
+st.caption(
+    "Alle logies uit de huidige registerversie op kaart. "
+    "Klik op een punt voor de volledige registergegevens. "
+    "Gebruik de legenda rechtsonder om te filteren op type of grootte."
+)
+
+if not FOLIUM_BESCHIKBAAR:
+    st.info(
+        "📦 Voeg `folium` toe aan `requirements.txt` om de kaart te tonen."
+    )
+elif st.session_state.huidig_df is not None:
+    with st.spinner("Kaart wordt opgebouwd…"):
+        kaart = maak_kaart(
+            st.session_state.huidig_df,
+            naam_kol=cfg_sessie["kolommen"]["naamkolom"],
+        )
+    if kaart is None:
+        st.warning(
+            "⚠️ Geen kaart beschikbaar — coördinatenkolommen (`lat` / `long`) "
+            "niet gevonden in het register, of alle coördinaten zijn ongeldig."
+        )
+    else:
+        components.html(kaart._repr_html_(), height=560)
 
 
 # ── Download huidige registerversie ──────────────────────────────────────────
